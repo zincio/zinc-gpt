@@ -23,9 +23,12 @@ export function createTools(sessionId: string) {
         query: z.string().describe('The search query for products'),
       }),
       execute: async ({ query }): Promise<SearchResult> => {
+        logger.info('Search tool called', { query })
+
         // Content moderation check
         const moderation = moderateSearchQuery(query)
         if (!moderation.allowed) {
+          logger.info('Search blocked by moderation', { query, reason: moderation.reason })
           return {
             products: [],
             query,
@@ -34,7 +37,9 @@ export function createTools(sessionId: string) {
         }
 
         try {
+          logger.info('Calling searchProducts', { query })
           const products = await searchProducts({ query, numResults: 6 })
+          logger.info('searchProducts returned', { count: products.length })
 
           // Log search diagnostics
           if (products.length === 0) {

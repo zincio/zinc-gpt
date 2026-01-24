@@ -82,19 +82,30 @@ export async function POST(req: Request) {
 
   logger.info('Starting chat stream', { sessionId })
 
-  const result = streamText({
-    model: anthropic('claude-sonnet-4-20250514'),
-    system: SYSTEM_PROMPT,
-    messages,
-    tools,
-    maxSteps: 5, // Allow multiple tool calls in a single response
-  })
+  try {
+    const result = streamText({
+      model: anthropic('claude-sonnet-4-20250514'),
+      system: SYSTEM_PROMPT,
+      messages,
+      tools,
+      maxSteps: 5, // Allow multiple tool calls in a single response
+      onError: (error) => {
+        logger.error('Stream error', { error: String(error) })
+      },
+    })
 
-  return result.toDataStreamResponse({
-    headers: {
-      'X-Session-Id': sessionId,
-      'X-RateLimit-Remaining': String(rateLimit.remaining),
-      'X-RateLimit-Reset': String(rateLimit.resetTime),
-    },
-  })
+    return result.toDataStreamResponse({
+      headers: {
+        'X-Session-Id': sessionId,
+        'X-RateLimit-Remaining': String(rateLimit.remaining),
+        'X-RateLimit-Reset': String(rateLimit.resetTime),
+      },
+    })
+  } catch (error) {
+    logger.error('Chat failed', { error: error instanceof Error ? error.message : String(error) })
+    return NextResponse.json(
+      { error: 'Chat request failed' },
+      { status: 500 }
+    )
+  }
 }
