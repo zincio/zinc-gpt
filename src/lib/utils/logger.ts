@@ -20,9 +20,7 @@ export const logger = {
   },
 
   info: (message: string, meta?: LogMeta): void => {
-    if (isDev) {
-      console.info(formatMessage('info', message, meta))
-    }
+    console.info(formatMessage('info', message, meta))
   },
 
   warn: (message: string, meta?: LogMeta): void => {
