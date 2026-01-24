@@ -61,15 +61,26 @@ export async function POST(req: Request) {
 
   const { messages, sessionId: existingSessionId } = validation.data!
 
-  // Get or create session
-  let sessionId = existingSessionId
-  if (!sessionId || !getSessionById(sessionId)) {
-    const session = createSession()
-    sessionId = session.id
+  logger.info('Chat request received', { existingSessionId, messageCount: messages.length })
+
+  // Get or create session (resilient to SQLite failures)
+  let sessionId = existingSessionId || `fallback-${Date.now()}`
+  try {
+    if (!existingSessionId || !getSessionById(existingSessionId)) {
+      const session = createSession()
+      sessionId = session.id
+    }
+  } catch (error) {
+    logger.error('Session creation failed, using fallback', {
+      error: error instanceof Error ? error.message : 'Unknown',
+    })
+    // Continue with fallback sessionId
   }
 
   // Create tools with session context
   const tools = createTools(sessionId)
+
+  logger.info('Starting chat stream', { sessionId })
 
   const result = streamText({
     model: anthropic('claude-sonnet-4-20250514'),
