@@ -90,7 +90,10 @@ export async function POST(req: Request) {
       tools,
       maxSteps: 5, // Allow multiple tool calls in a single response
       onError: (error) => {
-        logger.error('Stream error', { error: String(error) })
+        logger.error('Stream error', {
+          error: error instanceof Error ? error.message : JSON.stringify(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        })
       },
     })
 
