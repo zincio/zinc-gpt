@@ -2,6 +2,9 @@
 
 A conversational shopping assistant powered by AI that helps users find and purchase products across major US retailers.
 
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/zinc-gpt?referralCode=zinc)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fzincio%2Fzinc-gpt&env=ANTHROPIC_API_KEY,SERPAPI_API_KEY,STRIPE_SECRET_KEY,STRIPE_WEBHOOK_SECRET,NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,ZINC_API_KEY&envDescription=API%20keys%20required%20for%20the%20shopping%20assistant&project-name=zinc-gpt&repository-name=zinc-gpt)
+
 ## Features
 
 - **AI-Powered Search**: Natural language product search across Amazon and Walmart

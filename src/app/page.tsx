@@ -122,9 +122,6 @@ export default function Home() {
         window.history.replaceState({}, '', `/?sessionId=${newSessionId}`)
       }
     },
-    onError: (error) => {
-      console.error('Chat error:', error)
-    },
   })
 
   // Save messages to localStorage when they change

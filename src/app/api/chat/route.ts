@@ -61,8 +61,6 @@ export async function POST(req: Request) {
 
   const { messages, sessionId: existingSessionId } = validation.data!
 
-  logger.info('Chat request received', { existingSessionId, messageCount: messages.length })
-
   // Get or create session (resilient to SQLite failures)
   let sessionId = existingSessionId || `fallback-${Date.now()}`
   try {
@@ -70,17 +68,12 @@ export async function POST(req: Request) {
       const session = createSession()
       sessionId = session.id
     }
-  } catch (error) {
-    logger.error('Session creation failed, using fallback', {
-      error: error instanceof Error ? error.message : 'Unknown',
-    })
+  } catch {
     // Continue with fallback sessionId
   }
 
   // Create tools with session context
   const tools = createTools(sessionId)
-
-  logger.info('Starting chat stream', { sessionId })
 
   try {
     const result = streamText({
@@ -89,12 +82,6 @@ export async function POST(req: Request) {
       messages,
       tools,
       maxSteps: 5, // Allow multiple tool calls in a single response
-      onError: (error) => {
-        logger.error('Stream error', {
-          error: error instanceof Error ? error.message : JSON.stringify(error),
-          stack: error instanceof Error ? error.stack : undefined,
-        })
-      },
     })
 
     return result.toDataStreamResponse({

@@ -23,12 +23,9 @@ export function createTools(sessionId: string) {
         query: z.string().describe('The search query for products'),
       }),
       execute: async ({ query }): Promise<SearchResult> => {
-        logger.info('Search tool called', { query })
-
         // Content moderation check
         const moderation = moderateSearchQuery(query)
         if (!moderation.allowed) {
-          logger.info('Search blocked by moderation', { query, reason: moderation.reason })
           return {
             products: [],
             query,
@@ -37,14 +34,7 @@ export function createTools(sessionId: string) {
         }
 
         try {
-          logger.info('Calling searchProducts', { query })
           const products = await searchProducts({ query, numResults: 6 })
-          logger.info('searchProducts returned', { count: products.length })
-
-          // Log search diagnostics
-          if (products.length === 0) {
-            logger.info('Search returned no products', { query })
-          }
 
           // Filter out products over the price limit
           const affordableProducts = products.filter(
@@ -52,11 +42,6 @@ export function createTools(sessionId: string) {
           )
 
           if (products.length > 0 && affordableProducts.length === 0) {
-            logger.info('All products over price limit', {
-              query,
-              productCount: products.length,
-              prices: products.map(p => p.price / 100),
-            })
             return {
               products: [],
               query,
