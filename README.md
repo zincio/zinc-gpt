@@ -43,7 +43,7 @@ A conversational shopping assistant powered by AI that helps users find and purc
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/zinc-gpt.git
+git clone https://github.com/zincio/zinc-gpt.git
 cd zinc-gpt
 
 # Install dependencies
@@ -108,6 +108,7 @@ Configure webhooks in:
 |----------|--------|-------------|
 | `/api/chat` | POST | AI chat endpoint |
 | `/api/checkout` | POST | Create Stripe checkout session |
+| `/api/estimate` | POST | Estimate shipping and tax by zip code |
 | `/api/stripe/webhook` | POST | Handle Stripe events |
 | `/api/zinc/webhook` | POST | Handle Zinc order events |
 
@@ -119,6 +120,7 @@ src/
 │   ├── api/
 │   │   ├── chat/           # AI chat endpoint
 │   │   ├── checkout/       # Stripe checkout
+│   │   ├── estimate/       # Shipping/tax estimation
 │   │   ├── stripe/webhook/ # Stripe webhooks
 │   │   └── zinc/webhook/   # Zinc webhooks
 │   └── page.tsx            # Main UI
@@ -133,6 +135,7 @@ src/
 │   │   ├── rate-limit.ts      # Rate limiting
 │   │   └── validation.ts      # Request validation
 │   ├── services/
+│   │   ├── cost-estimator.ts  # Tax/shipping estimation
 │   │   ├── order-processor.ts # Order fulfillment
 │   │   ├── product-parser.ts  # URL parsing
 │   │   ├── serpapi.ts         # Product search

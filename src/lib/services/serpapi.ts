@@ -108,9 +108,6 @@ async function fetchProductDetails(
 
     const data: SerpApiImmersiveProduct = await response.json()
 
-    // Log full response to understand available fields
-    console.log('=== FULL SERPAPI IMMERSIVE RESPONSE ===', JSON.stringify(data.product_results, null, 2))
-
     if (data.error || !data.product_results?.stores?.length) return null
 
     // Detect if this product has variants
@@ -127,16 +124,6 @@ async function fetchProductDetails(
       const storeTitle = s.title.toLowerCase()
       // If store title is longer or different, it likely includes variant info
       return storeTitle !== mainTitle && storeTitle.length > mainTitle.length
-    })
-
-    // Debug variant detection
-    console.log('=== VARIANT DETECTION ===', {
-      title: data.product_results.title,
-      price_range: data.product_results.price_range,
-      hasPriceRange,
-      hasDuplicateStores,
-      hasVariantTitle,
-      hasVariants: hasDuplicateStores || hasPriceRange || hasVariantTitle
     })
 
     const stores: Store[] = data.product_results.stores.map((store) => ({
