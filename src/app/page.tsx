@@ -118,7 +118,12 @@ export default function Home() {
       const newSessionId = response.headers.get('X-Session-Id')
       if (newSessionId && newSessionId !== sessionId) {
         setSessionId(newSessionId)
+        // Update URL so refresh preserves session
+        window.history.replaceState({}, '', `/?sessionId=${newSessionId}`)
       }
+    },
+    onError: (error) => {
+      console.error('Chat error:', error)
     },
   })
 
