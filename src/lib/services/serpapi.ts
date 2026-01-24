@@ -104,11 +104,25 @@ async function fetchProductDetails(
     })
 
     const response = await fetch(`https://serpapi.com/search.json?${params}`)
-    if (!response.ok) return null
+    if (!response.ok) {
+      logger.info('Immersive product fetch failed', { status: response.status })
+      return null
+    }
 
     const data: SerpApiImmersiveProduct = await response.json()
 
-    if (data.error || !data.product_results?.stores?.length) return null
+    if (data.error) {
+      logger.info('Immersive product API error', { error: data.error })
+      return null
+    }
+
+    if (!data.product_results?.stores?.length) {
+      logger.info('Immersive product has no stores', {
+        hasProductResults: !!data.product_results,
+        storesLength: data.product_results?.stores?.length ?? 0,
+      })
+      return null
+    }
 
     // Detect if this product has variants
     const storeNames = data.product_results.stores.map((s) => s.name)
@@ -212,7 +226,15 @@ export async function searchProducts(options: SearchOptions): Promise<Product[]>
   }
 
   const shoppingResults = data.shopping_results || []
-  logger.info('Shopping results received', { count: shoppingResults.length })
+  logger.info('Shopping results received', {
+    count: shoppingResults.length,
+    firstFew: shoppingResults.slice(0, 3).map(r => ({
+      title: r.title?.substring(0, 50),
+      price: r.extracted_price,
+      hasToken: !!r.immersive_product_page_token,
+      hasLink: !!r.product_link,
+    })),
+  })
 
   // Filter valid results (don't slice yet - we'll slice at the end)
   const validResults = shoppingResults.filter((result) => {
@@ -245,6 +267,12 @@ export async function searchProducts(options: SearchOptions): Promise<Product[]>
         result.immersive_product_page_token,
         apiKey
       )
+      logger.info('Product details fetched', {
+        title: result.title?.substring(0, 30),
+        hasDetails: !!details,
+        storesCount: details?.stores?.length ?? 0,
+        hasUrl: !!details?.url,
+      })
       if (details) {
         baseProduct.url = details.url
         baseProduct.stores = details.stores
@@ -282,6 +310,13 @@ export async function searchProducts(options: SearchOptions): Promise<Product[]>
   })
 
   const products = await Promise.all(productPromises)
+
+  logger.info('Products after processing', {
+    total: products.length,
+    withUrls: products.filter(p => p !== null && !!p.url).length,
+    withoutUrls: products.filter(p => p !== null && !p.url).length,
+    nullProducts: products.filter(p => p === null).length,
+  })
 
   // Filter out null products (variants) and products without URLs, then take requested amount
   const productsWithoutUrls = products.filter((p): p is Product => p !== null && !p.url)
