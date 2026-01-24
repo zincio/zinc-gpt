@@ -2,9 +2,17 @@ import Database from 'better-sqlite3'
 import { schema } from './schema'
 import path from 'path'
 
-// Use file-based database to ensure persistence across API routes
-const dbPath = path.join(process.cwd(), 'data.db')
-const db = new Database(dbPath)
+let db: Database.Database
+
+try {
+  // Try file-based database first
+  const dbPath = path.join(process.cwd(), 'data.db')
+  db = new Database(dbPath)
+} catch {
+  // Fall back to in-memory database if file-based fails
+  console.warn('File-based SQLite failed, using in-memory database')
+  db = new Database(':memory:')
+}
 
 // Initialize schema (safe to run multiple times due to IF NOT EXISTS)
 db.exec(schema)
