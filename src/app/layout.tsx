@@ -1,13 +1,11 @@
 import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
+import { GeistSans } from 'geist/font/sans'
 import './globals.css'
 import { Providers } from '@/providers/providers'
 
-const inter = Inter({ subsets: ['latin'] })
-
 export const metadata: Metadata = {
-  title: 'Zinc Chat Commerce',
-  description: 'Buy products from any retailer through conversation',
+  title: 'Zinc GPT',
+  description: 'Shop any retailer by chat',
 }
 
 export default function RootLayout({
@@ -16,8 +14,8 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en">
-      <body className={inter.className}>
+    <html lang="en" className={GeistSans.variable}>
+      <body className={GeistSans.className}>
         <Providers>{children}</Providers>
       </body>
     </html>
