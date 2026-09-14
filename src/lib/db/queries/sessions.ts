@@ -4,8 +4,7 @@ import type { CartItem } from '@/lib/utils/validation'
 
 export type SessionState = 'browsing' | 'collecting_info' | 'checkout' | 'completed'
 
-export function createSession(userId?: string): SessionRow {
-  const id = uuidv4()
+export function createSession(userId?: string, id: string = uuidv4()): SessionRow {
   const stmt = db.prepare(`
     INSERT INTO sessions (id, user_id, state, cart_data)
     VALUES (?, ?, 'browsing', '[]')

@@ -1,5 +1,9 @@
 import { logger } from '@/lib/utils/logger'
 
+/**
+ * Zinc API v2 client. https://www.zinc.com/docs/v2/api-reference
+ * Auth: `Authorization: Bearer <api key>` from https://app.zinc.com
+ */
 const ZINC_API_URL = 'https://api.zinc.com'
 
 interface ZincAddress {
@@ -29,15 +33,61 @@ interface ZincOrderRequest {
   metadata?: Record<string, string>
 }
 
+/** Order lifecycle states. https://www.zinc.com/docs/v2/api-reference/orders/get-order */
+type ZincOrderStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'order_placed'
+  | 'order_failed'
+  | 'cancelled'
+  | 'cancelled_by_retailer'
+
+interface ZincOrderItem {
+  id: string
+  url: string
+  quantity: number
+  variant?: Array<{ label: string; value: string }>
+  status?: string
+  created_at?: string
+  updated_at?: string
+}
+
+interface ZincTrackingNumber {
+  id?: string
+  carrier: string
+  tracking_number: string
+  status?: string
+  estimated_delivery_date?: string
+  delivered_at?: string
+}
+
+interface ZincPriceComponents {
+  subtotal: number
+  shipping: number
+  tax: number
+  total: number
+  currency?: string
+}
+
+interface ZincJobResult {
+  success: boolean
+  error?: string
+  error_type?: string
+  price_components?: ZincPriceComponents
+  estimated_delivery?: string
+}
+
 interface ZincOrderResponse {
   id: string
-  status: string
-  items?: Array<{
-    product_url: string
-    quantity: number
-    price?: number
-  }>
+  status: ZincOrderStatus
+  max_price: number
+  attempts?: number
+  items?: ZincOrderItem[]
   shipping_address?: ZincAddress
+  metadata?: Record<string, string>
+  merchant_order_ids?: string[]
+  tracking_numbers?: ZincTrackingNumber[]
+  job_result?: ZincJobResult | null
   created_at?: string
   updated_at?: string
 }
@@ -98,6 +148,7 @@ class ZincClient {
     return data as ZincOrderResponse
   }
 
+  /** Cancels a pending order. Returns 204 on success; 422 if it already started. */
   async cancelOrder(orderId: string): Promise<void> {
     const response = await fetch(`${ZINC_API_URL}/orders/${orderId}/cancel`, {
       method: 'POST',
@@ -105,8 +156,8 @@ class ZincClient {
     })
 
     if (!response.ok) {
-      const data = await response.json() as ZincError
-      throw new Error(data.message || `Zinc API error: ${data.code}`)
+      const data = (await response.json().catch(() => ({}))) as Partial<ZincError>
+      throw new Error(data.message || `Zinc API error: ${data.code ?? response.status}`)
     }
   }
 }
@@ -120,4 +171,9 @@ export type {
   ZincProduct,
   ZincOrderRequest,
   ZincOrderResponse,
+  ZincOrderStatus,
+  ZincOrderItem,
+  ZincTrackingNumber,
+  ZincJobResult,
+  ZincPriceComponents,
 }

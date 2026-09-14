@@ -2,8 +2,6 @@ import { NextResponse } from 'next/server'
 import { getStripeClient } from '@/lib/services/stripe'
 import { logger } from '@/lib/utils/logger'
 
-const MAX_PRICE_DOLLARS = 100
-
 export async function POST(request: Request) {
   try {
     const body = await request.json()
@@ -12,14 +10,6 @@ export async function POST(request: Request) {
     if (!productTitle || !productPrice) {
       return NextResponse.json(
         { error: 'Missing required fields' },
-        { status: 400 }
-      )
-    }
-
-    // Enforce $100 purchase limit
-    if (productPrice > MAX_PRICE_DOLLARS) {
-      return NextResponse.json(
-        { error: `Products over $${MAX_PRICE_DOLLARS} are not available for purchase.` },
         { status: 400 }
       )
     }

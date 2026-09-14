@@ -1,22 +1,48 @@
 import { z } from 'zod'
 
+const MAX_MESSAGES = 50
+const MAX_TEXT_CHARS = 4000
+
+/**
+ * Loose schema for an AI SDK UIMessage. Tool parts are validated separately by
+ * `validateUIMessages` against the real tool schemas in the chat route.
+ */
+const uiMessageSchema = z.looseObject({
+  id: z.string().min(1).max(128),
+  role: z.enum(['user', 'assistant', 'system']),
+  parts: z.array(z.looseObject({ type: z.string() })).max(100),
+})
+
 /**
  * Schema for chat request body validation.
  */
 export const chatRequestSchema = z.object({
   messages: z
-    .array(
-      z.object({
-        role: z.enum(['user', 'assistant', 'system']),
-        content: z.string().max(2000, 'Message content too long (max 2000 characters)'),
-      })
-    )
-    .max(50, 'Too many messages (max 50)')
-    .min(1, 'At least one message is required'),
-  sessionId: z.string().uuid().optional().nullable(),
+    .array(uiMessageSchema)
+    .min(1, 'At least one message is required')
+    .max(MAX_MESSAGES, `Too many messages (max ${MAX_MESSAGES})`)
+    .refine(
+      (messages) =>
+        messages.every((message) => {
+          const textLength = message.parts.reduce((sum, part) => {
+            const text = (part as { text?: unknown }).text
+            return sum + (typeof text === 'string' ? text.length : 0)
+          }, 0)
+          return textLength <= MAX_TEXT_CHARS
+        }),
+      { message: `Message content too long (max ${MAX_TEXT_CHARS} characters)` }
+    ),
+  sessionId: z.uuid().optional().nullable(),
 })
 
 export type ChatRequest = z.infer<typeof chatRequestSchema>
+
+function formatFirstIssue(error: z.ZodError): string {
+  const firstIssue = error.issues[0]
+  return firstIssue
+    ? `${firstIssue.path.join('.')}: ${firstIssue.message}`
+    : 'Invalid request body'
+}
 
 /**
  * Validate a chat request body.
@@ -40,13 +66,7 @@ export function safeParseChatRequest(body: unknown): {
     return { success: true, data: result.data }
   }
 
-  // Format the first error message
-  const firstError = result.error.errors[0]
-  const errorMessage = firstError
-    ? `${firstError.path.join('.')}: ${firstError.message}`
-    : 'Invalid request body'
-
-  return { success: false, error: errorMessage }
+  return { success: false, error: formatFirstIssue(result.error) }
 }
 
 /**
@@ -54,9 +74,9 @@ export function safeParseChatRequest(body: unknown): {
  */
 export const checkoutRequestSchema = z.object({
   productTitle: z.string().min(1).max(500),
-  productPrice: z.number().positive().max(100, 'Products over $100 are not available'),
-  productImage: z.string().url().optional().nullable(),
-  productUrl: z.string().url(),
+  productPrice: z.number().positive(),
+  productImage: z.url().optional().nullable(),
+  productUrl: z.url(),
   sessionId: z.string().optional().nullable(),
 })
 
@@ -76,10 +96,5 @@ export function safeParseCheckoutRequest(body: unknown): {
     return { success: true, data: result.data }
   }
 
-  const firstError = result.error.errors[0]
-  const errorMessage = firstError
-    ? `${firstError.path.join('.')}: ${firstError.message}`
-    : 'Invalid request body'
-
-  return { success: false, error: errorMessage }
+  return { success: false, error: formatFirstIssue(result.error) }
 }

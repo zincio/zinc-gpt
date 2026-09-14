@@ -1,8 +1,16 @@
 import { NextResponse } from 'next/server'
-import { streamText } from 'ai'
-import { createAnthropic } from '@ai-sdk/anthropic'
+import {
+  convertToModelMessages,
+  createUIMessageStreamResponse,
+  isStepCount,
+  streamText,
+  toUIMessageStream,
+  validateUIMessages,
+} from 'ai'
+import type { AnthropicLanguageModelOptions } from '@ai-sdk/anthropic'
 import { SYSTEM_PROMPT } from '@/lib/ai/prompts'
-import { createTools } from '@/lib/ai/tools'
+import { createTools, type ShopUIMessage } from '@/lib/ai/tools'
+import { getEffort, getModel, getModelId, supportsFallbacks } from '@/lib/ai/provider'
 import { createSession, getSessionById } from '@/lib/db/queries'
 import { safeParseChatRequest } from '@/lib/middleware/validation'
 import {
@@ -14,10 +22,6 @@ import {
 import { logger } from '@/lib/utils/logger'
 
 export const maxDuration = 60
-
-const anthropic = createAnthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
 
 export async function POST(req: Request) {
   // Rate limiting
@@ -52,50 +56,88 @@ export async function POST(req: Request) {
   }
 
   const validation = safeParseChatRequest(body)
-  if (!validation.success) {
+  if (!validation.success || !validation.data) {
     return NextResponse.json(
-      { error: validation.error },
+      { error: validation.error ?? 'Invalid request body' },
       { status: 400 }
     )
   }
 
-  const { messages, sessionId: existingSessionId } = validation.data!
+  const { messages: rawMessages, sessionId: requestedSessionId } = validation.data
 
-  // Get or create session (resilient to SQLite failures)
-  let sessionId = existingSessionId || `fallback-${Date.now()}`
+  // Resolve session. The client generates a UUID and sends it with every
+  // request; we make sure a row exists for it (resilient to SQLite failures).
+  const sessionId = requestedSessionId || crypto.randomUUID()
   try {
-    if (!existingSessionId || !getSessionById(existingSessionId)) {
-      const session = createSession()
-      sessionId = session.id
+    if (!getSessionById(sessionId)) {
+      createSession(undefined, sessionId)
     }
-  } catch {
-    // Continue with fallback sessionId
+  } catch (error) {
+    logger.warn('Session persistence unavailable, continuing', {
+      error: error instanceof Error ? error.message : String(error),
+    })
   }
 
   // Create tools with session context
   const tools = createTools(sessionId)
 
+  // Validate UI messages against the tool schemas (rejects malformed tool parts)
+  let messages: ShopUIMessage[]
   try {
-    const result = streamText({
-      model: anthropic('claude-sonnet-4-20250514'),
-      system: SYSTEM_PROMPT,
-      messages,
-      tools,
-      maxSteps: 5, // Allow multiple tool calls in a single response
-    })
-
-    return result.toDataStreamResponse({
-      headers: {
-        'X-Session-Id': sessionId,
-        'X-RateLimit-Remaining': String(rateLimit.remaining),
-        'X-RateLimit-Reset': String(rateLimit.resetTime),
-      },
-    })
+    messages = (await validateUIMessages({ messages: rawMessages, tools })) as ShopUIMessage[]
   } catch (error) {
-    logger.error('Chat failed', { error: error instanceof Error ? error.message : String(error) })
-    return NextResponse.json(
-      { error: 'Chat request failed' },
-      { status: 500 }
-    )
+    logger.warn('Invalid UI messages', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return NextResponse.json({ error: 'Invalid message format' }, { status: 400 })
   }
+
+  const modelId = getModelId()
+
+  let model
+  try {
+    model = getModel()
+  } catch (error) {
+    logger.error('AI provider not configured', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return NextResponse.json({ error: 'Chat is not configured' }, { status: 500 })
+  }
+
+  const anthropicOptions = {
+    effort: getEffort(),
+    // Server-side refusal fallbacks: if the primary model declines a request on
+    // policy grounds, Anthropic re-runs it on a fallback model in the same call.
+    ...(supportsFallbacks(modelId) ? { fallbacks: 'default' as const } : {}),
+  } satisfies AnthropicLanguageModelOptions
+
+  const result = streamText({
+    model,
+    instructions: SYSTEM_PROMPT,
+    messages: await convertToModelMessages(messages),
+    tools,
+    stopWhen: isStepCount(5), // Allow multiple tool calls in a single response
+    providerOptions: {
+      anthropic: anthropicOptions,
+    },
+    onError: ({ error }) => {
+      logger.error('Chat stream error', {
+        model: modelId,
+        error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      })
+    },
+  })
+
+  return createUIMessageStreamResponse({
+    stream: toUIMessageStream({
+      stream: result.stream,
+      originalMessages: messages,
+      onError: () => 'Something went wrong while generating a response. Please try again.',
+    }),
+    headers: {
+      'X-Session-Id': sessionId,
+      'X-RateLimit-Remaining': String(rateLimit.remaining),
+      'X-RateLimit-Reset': String(rateLimit.resetTime),
+    },
+  })
 }

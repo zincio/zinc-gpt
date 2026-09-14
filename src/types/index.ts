@@ -9,19 +9,3 @@ export interface Product {
   asin?: string
 }
 
-// Message types for chat
-export interface ChatMessage {
-  id: string
-  role: 'user' | 'assistant' | 'system'
-  content: string
-  createdAt?: Date
-  toolInvocations?: ToolInvocation[]
-}
-
-export interface ToolInvocation {
-  toolCallId: string
-  toolName: string
-  state: 'call' | 'result'
-  args?: Record<string, unknown>
-  result?: unknown
-}
