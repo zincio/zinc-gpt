@@ -93,6 +93,16 @@ npm test
 npm run build
 ```
 
+## Launch Links
+
+Link to the app with a query to open a fresh chat that searches for it right away, e.g. from zinc.com:
+
+```
+https://<your-app>/?q=wireless%20earbuds%20under%20%2430
+```
+
+The query is URL-encoded, capped at 500 characters, and removed from the address bar once sent, so a refresh won't resend it.
+
 ## API Endpoints
 
 | Endpoint | Method | Description |

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { tool, type InferUITools, type UIDataTypes, type UIMessage } from 'ai'
-import { listRetailers, type Product } from '@/lib/services/zinc-products'
+import { listRetailers, normalizeTitle, type Product } from '@/lib/services/zinc-products'
 import {
   callZincTool,
   pendingOrderFromMeta,
@@ -121,6 +121,15 @@ export function createTools(_sessionId: string) {
           if (sort === 'price_asc') results = [...results].sort((a, b) => a.price_cents! - b.price_cents!)
           if (sort === 'price_desc') results = [...results].sort((a, b) => b.price_cents! - a.price_cents!)
           if (sort === 'rating') results = [...results].sort((a, b) => (b.stars ?? 0) - (a.stars ?? 0))
+
+          // Collapse colour/size variants of one listing so they don't fill the list
+          const seenTitles = new Set<string>()
+          results = results.filter((r) => {
+            const key = `${r.retailer}:${normalizeTitle(r.title)}`
+            if (seenTitles.has(key)) return false
+            seenTitles.add(key)
+            return true
+          })
 
           const products: Product[] = results.slice(0, NUM_RESULTS).map((r) => ({
             id: productId(r.retailer, r.url),

@@ -217,7 +217,7 @@ function productId(url: string): string {
 }
 
 /** Collapse a listing title so colour/size variants of one listing dedupe. */
-function normalizeTitle(title: string): string {
+export function normalizeTitle(title: string): string {
   return title
     .toLowerCase()
     .replace(/[（(][^）)]*[）)]/g, ' ')

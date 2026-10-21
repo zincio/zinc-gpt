@@ -85,6 +85,9 @@ function newSessionId(): string {
   })
 }
 
+/** Longest launch query we accept from a `?q=` link */
+const MAX_LAUNCH_QUERY = 500
+
 function formatPrice(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`
 }
@@ -93,10 +96,15 @@ export default function Home() {
   const router = useRouter()
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [initialMessages, setInitialMessages] = useState<ShopUIMessage[]>([])
+  const [launchQuery, setLaunchQuery] = useState<string | null>(null)
 
   // Bootstrap session + messages from URL/localStorage on mount
   useEffect(() => {
-    const urlSessionId = new URLSearchParams(window.location.search).get('sessionId')
+    const params = new URLSearchParams(window.location.search)
+    // `/?q=...` is the launch link from zinc.com: always a fresh chat that
+    // sends the query as its first message.
+    const query = params.get('q')?.trim().slice(0, MAX_LAUNCH_QUERY) || null
+    const urlSessionId = query ? null : params.get('sessionId')
     const id = urlSessionId || newSessionId()
 
     // Load messages from localStorage
@@ -113,9 +121,10 @@ export default function Home() {
     // Keep the session in the URL so refresh preserves it. Go through the Next
     // router (not raw history.replaceState) so the router's own URL stays in
     // sync and the param survives Fast Refresh / router.refresh().
-    if (urlSessionId !== id) {
+    if (urlSessionId !== id || params.has('q')) {
       router.replace(`/?sessionId=${id}`, { scroll: false })
     }
+    setLaunchQuery(query)
     setSessionId(id)
   }, [router])
 
@@ -125,7 +134,12 @@ export default function Home() {
 
   return (
     <MotionConfig transition={SPRING} reducedMotion="user">
-      <Chat key={sessionId} sessionId={sessionId} initialMessages={initialMessages} />
+      <Chat
+        key={sessionId}
+        sessionId={sessionId}
+        initialMessages={initialMessages}
+        launchQuery={launchQuery}
+      />
     </MotionConfig>
   )
 }
@@ -133,9 +147,11 @@ export default function Home() {
 function Chat({
   sessionId,
   initialMessages,
+  launchQuery,
 }: {
   sessionId: string
   initialMessages: ShopUIMessage[]
+  launchQuery: string | null
 }) {
   const [input, setInput] = useState('')
   const formRef = useRef<HTMLFormElement>(null)
@@ -158,6 +174,18 @@ function Chat({
     })
 
   const isBusy = status === 'submitted' || status === 'streaming'
+
+  // Send the launch query once. Deferred and cancelled on cleanup so Strict
+  // Mode's throwaway first mount doesn't send it into a discarded chat.
+  const launched = useRef(false)
+  useEffect(() => {
+    if (!launchQuery || launched.current) return
+    const timer = setTimeout(() => {
+      launched.current = true
+      void sendMessage({ text: launchQuery })
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [launchQuery, sendMessage])
 
   // Save messages to localStorage when they change
   useEffect(() => {

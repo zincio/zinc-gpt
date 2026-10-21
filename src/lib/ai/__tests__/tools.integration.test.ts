@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createTools, type SearchResult, type PrepareOrderResult } from '../tools'
 
-vi.mock('@/lib/services/zinc-products', () => ({
+vi.mock('@/lib/services/zinc-products', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/services/zinc-products')>()),
   listRetailers: vi.fn().mockResolvedValue([{ retailer: 'amazon', displayName: 'Amazon' }]),
 }))
 
