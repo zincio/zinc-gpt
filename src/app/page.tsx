@@ -10,7 +10,6 @@ import {
   AlertCircleIcon,
   ArrowUpIcon,
   RotateCwIcon,
-  ExternalLinkIcon,
   ShoppingBagIcon,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -46,6 +45,7 @@ import {
 } from '@/components/ui/message-scroller'
 import { RotatingPlaceholder } from '@/components/rotating-placeholder'
 import { ThingsArc } from '@/components/things-arc'
+import { ZincLogo } from '@/components/zinc-logo'
 import { MESSAGE_ANIMATIONS } from '@/lib/message-animations'
 import type { Product } from '@/lib/services/zinc-products'
 import type { ShopUIMessage } from '@/lib/ai/tools'
@@ -199,12 +199,12 @@ function Chat({
       <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center">
         <Badge
           variant="outline"
-          className="pointer-events-auto bg-background/90 text-muted-foreground backdrop-blur"
+          className="pointer-events-auto bg-background/90 text-muted-foreground shadow-sm backdrop-blur"
           asChild
         >
           <a href={ZINC_MCP_DOCS_URL} target="_blank" rel="noopener noreferrer">
+            <ZincLogo className="text-foreground" />
             Powered by Zinc MCP
-            <ExternalLinkIcon />
           </a>
         </Badge>
       </div>
