@@ -1,37 +1,56 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createTools, type SearchResult, type CheckoutResult } from '../tools'
+import { createTools, type SearchResult, type PrepareOrderResult } from '../tools'
 
-// Mock the Zinc products module
 vi.mock('@/lib/services/zinc-products', () => ({
-  ZincProductsError: class ZincProductsError extends Error {
-    constructor(message: string, public status: number, public code?: string) {
-      super(message)
-    }
-  },
-  searchProducts: vi.fn().mockResolvedValue([
-    {
-      id: 'amazon:abcd1234',
-      retailer: 'amazon',
-      retailerName: 'Amazon',
-      title: 'Test Product',
-      price: 2999,
-      url: 'https://www.amazon.com/dp/B123',
-      image: 'https://example.com/image.jpg',
-    },
-  ]),
+  listRetailers: vi.fn().mockResolvedValue([{ retailer: 'amazon', displayName: 'Amazon' }]),
 }))
 
-// Mock stripe
-vi.mock('@/lib/services/stripe', () => ({
-  getStripeClient: vi.fn().mockReturnValue({
-    checkout: {
-      sessions: {
-        create: vi.fn().mockResolvedValue({
-          url: 'https://checkout.stripe.com/test',
-        }),
+const searchOutput = {
+  structured: {
+    query: 'test',
+    results: [
+      {
+        url: 'https://www.amazon.com/dp/B123',
+        retailer: 'amazon',
+        title: 'Test Product',
+        image: 'https://example.com/image.jpg',
+        price_cents: 2999,
+        stars: 4.5,
       },
+    ],
+    result_count: 1,
+    environment: 'live',
+  },
+  text: '',
+  meta: {},
+}
+
+const prepareOutput = {
+  structured: {
+    products: [{ url: 'https://www.amazon.com/dp/B123', quantity: 1, title: 'Test Product', price_cents: 2999 }],
+    max_price_cents: 4100,
+    max_price_display: '$41.00',
+    quote: {
+      listed_price_cents: 2999,
+      estimated_tax_cents: 300,
+      shipping_cents: 0,
+      order_fee_cents: 100,
+      estimated_total_cents: 3399,
+      hold_cents: 3600,
     },
-  }),
+    can_place: true,
+    environment: 'live',
+  },
+  text: 'Ready to review: 1 item(s), about $33.99.',
+  meta: {
+    confirmation: 'secret-token',
+    order: { products: [{ url: 'https://www.amazon.com/dp/B123', quantity: 1 }], max_price: 4100 },
+  },
+}
+
+vi.mock('@/lib/services/zinc-mcp', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/services/zinc-mcp')>()),
+  callZincTool: vi.fn(async (name: string) => (name === 'prepare-order' ? prepareOutput : searchOutput)),
 }))
 
 // Minimal ToolExecutionOptions for invoking tool.execute() directly in tests
@@ -118,36 +137,38 @@ describe('Tools Integration', () => {
     })
   })
 
-  describe('create_checkout tool', () => {
+  describe('prepare_order tool', () => {
     const product = {
       productTitle: 'Test Product',
       productPrice: 29.99,
       productImage: 'https://example.com/image.jpg',
       productUrl: 'https://www.amazon.com/dp/B123',
+      retailerName: 'Amazon',
     }
 
-    it('creates a Stripe checkout session and returns its URL', async () => {
-      const result = await run<CheckoutResult>(tools.create_checkout, product)
-      expect(result.url).toBe('https://checkout.stripe.com/test')
+    it('returns the quote and the confirmation for the card', async () => {
+      const result = await run<PrepareOrderResult>(tools.prepare_order, product)
       expect(result.error).toBeUndefined()
+      expect(result.quote?.estimated_total_cents).toBe(3399)
+      expect(result.pending?.confirmation).toBe('secret-token')
     })
 
-    it('has no price ceiling', async () => {
-      const result = await run<CheckoutResult>(tools.create_checkout, {
-        ...product,
-        productPrice: 1299.0,
-      })
-      expect(result.url).toBe('https://checkout.stripe.com/test')
-    })
-
-    it('returns a friendly error when Stripe fails', async () => {
-      const { getStripeClient } = await import('@/lib/services/stripe')
-      vi.mocked(getStripeClient).mockReturnValueOnce({
-        checkout: { sessions: { create: vi.fn().mockRejectedValue(new Error('boom')) } },
+    it('never shows the confirmation token to the model', async () => {
+      const output = await run<PrepareOrderResult>(tools.prepare_order, product)
+      const forModel = await tools.prepare_order.toModelOutput!({
+        toolCallId: 'test',
+        input: product,
+        output,
       } as never)
-      const result = await run<CheckoutResult>(tools.create_checkout, product)
-      expect(result.url).toBeUndefined()
-      expect(result.error).toContain('Failed to create checkout')
+      expect(JSON.stringify(forModel)).not.toContain('secret-token')
+    })
+
+    it('returns a friendly error when Zinc fails', async () => {
+      const { callZincTool } = await import('@/lib/services/zinc-mcp')
+      vi.mocked(callZincTool).mockRejectedValueOnce(new Error('Out of stock'))
+      const result = await run<PrepareOrderResult>(tools.prepare_order, product)
+      expect(result.pending).toBeUndefined()
+      expect(result.error).toContain('Out of stock')
     })
   })
 })

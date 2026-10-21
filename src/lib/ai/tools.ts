@@ -1,7 +1,14 @@
 import { z } from 'zod'
 import { tool, type InferUITools, type UIDataTypes, type UIMessage } from 'ai'
-import { searchProducts, ZincProductsError, type Product } from '@/lib/services/zinc-products'
-import { getStripeClient } from '@/lib/services/stripe'
+import { listRetailers, type Product } from '@/lib/services/zinc-products'
+import {
+  callZincTool,
+  pendingOrderFromMeta,
+  type McpPendingOrder,
+  type McpPrepareOutput,
+  type McpQuote,
+  type McpSearchOutput,
+} from '@/lib/services/zinc-mcp'
 import { moderateSearchQuery } from '@/lib/ai/content-filter'
 import { logger } from '@/lib/utils/logger'
 
@@ -13,16 +20,57 @@ export interface SearchResult {
   error?: string
 }
 
-export interface CheckoutResult {
-  url?: string
+export interface PrepareOrderResult {
+  product?: {
+    title: string
+    url: string
+    image?: string
+    retailerName: string
+    priceCents: number
+    quantity: number
+  }
+  quote?: McpQuote
+  maxPriceDisplay?: string
+  /**
+   * Token + bound order for place-order. Goes to the browser (like the MCP
+   * card) but is stripped from what the model sees by toModelOutput.
+   */
+  pending?: McpPendingOrder
+  /** The server's own summary, for the model */
+  summary?: string
   error?: string
 }
 
-export function createTools(sessionId: string) {
+const NUM_RESULTS = 6
+
+function titleCase(slug: string): string {
+  return slug.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+async function retailerLabels(): Promise<Map<string, string>> {
+  try {
+    const list = await listRetailers()
+    return new Map(list.map((r) => [r.retailer, r.displayName]))
+  } catch {
+    return new Map()
+  }
+}
+
+function productId(retailer: string, url: string): string {
+  // FNV-1a 32-bit over the URL: stable, short, and good enough as a React key
+  let hash = 0x811c9dc5
+  for (let i = 0; i < url.length; i++) {
+    hash ^= url.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return `${retailer}:${hash.toString(16).padStart(8, '0')}`
+}
+
+export function createTools(_sessionId: string) {
   return {
     search_products: tool({
       description:
-        'Search every retailer Zinc supports (Amazon, Walmart, Target, Best Buy, Home Depot, and more) in one call. Returns titles, prices, images, ratings, and an orderable retailer URL for each result. Pass price bounds when the user states a budget.',
+        'Search every retailer Zinc supports (Amazon, Walmart, Target, Best Buy, Home Depot, and more) in one call via the Zinc MCP server. Returns titles, prices, images, ratings, and an orderable retailer URL for each result. Pass price bounds when the user states a budget.',
       inputSchema: z.object({
         query: z.string().describe('The product search query, without price words (put those in minPrice/maxPrice)'),
         minPrice: z.number().optional().describe('Minimum price in dollars, if the user gave a floor'),
@@ -51,14 +99,41 @@ export function createTools(sessionId: string) {
         }
 
         try {
-          const products = await searchProducts({
-            query,
-            numResults: 6,
-            minPriceCents: minPrice !== undefined ? Math.round(minPrice * 100) : undefined,
-            maxPriceCents: maxPrice !== undefined ? Math.round(maxPrice * 100) : undefined,
-            retailers: retailers?.map((r) => r.toLowerCase().trim()).filter(Boolean),
-            sort,
+          const stores = retailers?.map((r) => r.toLowerCase().trim()).filter(Boolean)
+          const [{ structured }, labels] = await Promise.all([
+            callZincTool<McpSearchOutput>('search-products', {
+              query,
+              ...(stores?.length ? { retailers: stores } : {}),
+            }),
+            retailerLabels(),
+          ])
+
+          // The MCP search has no price or sort parameters, so apply them to its
+          // (up to 20, best-first) results here.
+          const min = minPrice !== undefined ? Math.round(minPrice * 100) : undefined
+          const max = maxPrice !== undefined ? Math.round(maxPrice * 100) : undefined
+          let results = (structured.results ?? []).filter((r) => {
+            if (!r.price_cents || r.price_cents <= 0) return false
+            if (min !== undefined && r.price_cents < min) return false
+            if (max !== undefined && r.price_cents > max) return false
+            return true
           })
+          if (sort === 'price_asc') results = [...results].sort((a, b) => a.price_cents! - b.price_cents!)
+          if (sort === 'price_desc') results = [...results].sort((a, b) => b.price_cents! - a.price_cents!)
+          if (sort === 'rating') results = [...results].sort((a, b) => (b.stars ?? 0) - (a.stars ?? 0))
+
+          const products: Product[] = results.slice(0, NUM_RESULTS).map((r) => ({
+            id: productId(r.retailer, r.url),
+            retailer: r.retailer,
+            retailerName: labels.get(r.retailer) ?? titleCase(r.retailer),
+            title: r.title,
+            price: r.price_cents!,
+            url: r.url,
+            image: r.image,
+            brand: r.brand,
+            rating: r.stars,
+            reviews: r.num_reviews,
+          }))
 
           if (products.length === 0) {
             return {
@@ -70,25 +145,12 @@ export function createTools(sessionId: string) {
 
           return { products, query }
         } catch (error) {
-          logger.error('Search failed', {
-            query,
-            error: error instanceof Error ? error.message : 'Unknown error',
-          })
+          const message = error instanceof Error ? error.message : 'Unknown error'
+          logger.error('Search failed', { query, error: message })
 
-          if (error instanceof ZincProductsError && error.code === 'insufficient_funds') {
-            return {
-              products: [],
-              query,
-              error: 'Product search is temporarily unavailable (the store wallet needs a top-up). Please try again later.',
-            }
-          }
-
-          if (error instanceof ZincProductsError && error.status === 422 && retailers?.length) {
-            return {
-              products: [],
-              query,
-              error: `One of those stores (${retailers.join(', ')}) isn't searchable through Zinc yet, or more than 3 Shopify stores were named. Try other stores or search everywhere.`,
-            }
+          // An unknown store comes back as an error listing the accepted ones
+          if (retailers?.length && /retailer|store|accepted/i.test(message)) {
+            return { products: [], query, error: message }
           }
 
           return {
@@ -100,70 +162,91 @@ export function createTools(sessionId: string) {
       },
     }),
 
-    create_checkout: tool({
+    prepare_order: tool({
       description:
-        'Create a Stripe checkout session for a product. Use when the user wants to buy something.',
+        'Prepare an order for one product so the user can review the estimated total and pay. Spends nothing: the user confirms with the Pay & place button on the card, and enters their card, shipping address and phone number on the payment page.',
       inputSchema: z.object({
-        productTitle: z.string().describe('The product title'),
-        productPrice: z.number().describe('The product price in dollars'),
-        productImage: z.string().optional().describe('The product image URL'),
         productUrl: z.string().describe('The orderable product URL from search results'),
+        productTitle: z.string().describe('The product title from search results'),
+        productImage: z.string().optional().describe('The image URL from search results, verbatim'),
+        productPrice: z.number().describe('The listed price in dollars from search results'),
+        retailerName: z.string().optional().describe('The retailer display name from search results'),
+        quantity: z.number().int().min(1).max(9).optional(),
+        maxPrice: z
+          .number()
+          .optional()
+          .describe('Hard cap in dollars including tax and shipping. Only if the user named a budget for this order.'),
       }),
       execute: async ({
-        productTitle,
-        productPrice,
-        productImage,
         productUrl,
-      }): Promise<CheckoutResult> => {
-        try {
-          const stripe = getStripeClient()
-          const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+        productTitle,
+        productImage,
+        productPrice,
+        retailerName,
+        quantity = 1,
+        maxPrice,
+      }): Promise<PrepareOrderResult> => {
+        const moderation = moderateSearchQuery(productTitle)
+        if (!moderation.allowed) return { error: moderation.reason }
 
-          const session = await stripe.checkout.sessions.create({
-            payment_method_types: ['card'],
-            line_items: [
+        try {
+          const { structured, text, meta } = await callZincTool<McpPrepareOutput>('prepare-order', {
+            products: [
               {
-                price_data: {
-                  currency: 'usd',
-                  product_data: {
-                    name: productTitle,
-                    images: productImage ? [productImage] : [],
-                  },
-                  unit_amount: Math.round(productPrice * 100),
-                },
-                quantity: 1,
+                url: productUrl,
+                quantity,
+                title: productTitle,
+                ...(productImage ? { image: productImage } : {}),
+                price_cents: Math.round(productPrice * 100),
               },
             ],
-            mode: 'payment',
-            billing_address_collection: 'required',
-            shipping_address_collection: {
-              allowed_countries: ['US'],
-            },
-            phone_number_collection: {
-              enabled: true,
-            },
-            success_url: `${baseUrl}?success=true&sessionId=${sessionId}&checkout_session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${baseUrl}?canceled=true&sessionId=${sessionId}`,
-            metadata: {
-              sessionId,
-              productUrl,
-              productTitle,
-              productPriceCents: String(Math.round(productPrice * 100)),
-            },
+            ...(maxPrice !== undefined ? { max_price: Math.round(maxPrice * 100) } : {}),
           })
 
-          return { url: session.url! }
-        } catch (error) {
-          logger.error('Checkout creation failed', {
-            productTitle,
-            error: error instanceof Error ? error.message : 'Unknown error',
-          })
+          const pending = pendingOrderFromMeta(meta)
+          const item = structured.products?.[0]
+          if (!pending || !item || !structured.can_place) {
+            return { error: text || 'This order cannot be placed right now.' }
+          }
+
+          let host = retailerName
+          if (!host) {
+            try {
+              host = titleCase(new URL(productUrl).hostname.replace(/^www\./, '').split('.')[0])
+            } catch {
+              host = 'the retailer'
+            }
+          }
 
           return {
-            error: 'Failed to create checkout. Please try again.',
+            product: {
+              title: item.title ?? productTitle,
+              url: item.url,
+              image: item.image ?? productImage,
+              retailerName: host,
+              priceCents: item.price_cents ?? Math.round(productPrice * 100),
+              quantity: item.quantity,
+            },
+            quote: structured.quote ?? undefined,
+            maxPriceDisplay: structured.max_price_display,
+            pending,
+            summary: text,
+          }
+        } catch (error) {
+          logger.error('Prepare order failed', {
+            productUrl,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          })
+          return {
+            error: error instanceof Error ? error.message : 'Could not prepare the order. Please try again.',
           }
         }
       },
+      // The confirmation token is for the human's click only; never show it to the model.
+      toModelOutput: ({ output }) => ({
+        type: 'text',
+        value: output.error ?? output.summary ?? 'Ready to review. The user must click Pay & place.',
+      }),
     }),
   }
 }

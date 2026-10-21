@@ -114,7 +114,8 @@ export async function POST(req: Request) {
   const result = streamText({
     model,
     instructions: SYSTEM_PROMPT,
-    messages: await convertToModelMessages(messages),
+    // Pass tools so toModelOutput strips the order confirmation token from history too
+    messages: await convertToModelMessages(messages, { tools }),
     tools,
     stopWhen: isStepCount(5), // Allow multiple tool calls in a single response
     providerOptions: {

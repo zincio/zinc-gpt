@@ -10,8 +10,10 @@ import {
   AlertCircleIcon,
   ArrowUpIcon,
   RotateCwIcon,
+  ExternalLinkIcon,
   ShoppingBagIcon,
 } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
@@ -26,6 +28,7 @@ import {
   ItemActions,
   ItemContent,
   ItemDescription,
+  ItemFooter,
   ItemGroup,
   ItemMedia,
   ItemTitle,
@@ -46,18 +49,13 @@ import { ThingsArc } from '@/components/things-arc'
 import { MESSAGE_ANIMATIONS } from '@/lib/message-animations'
 import type { Product } from '@/lib/services/zinc-products'
 import type { ShopUIMessage } from '@/lib/ai/tools'
+import type { McpPayment, McpPlaceOutput } from '@/lib/services/zinc-mcp'
 
 type ShopUIPart = ShopUIMessage['parts'][number]
 type SearchToolPart = Extract<ShopUIPart, { type: 'tool-search_products' }>
-type CheckoutToolPart = Extract<ShopUIPart, { type: 'tool-create_checkout' }>
+type PrepareToolPart = Extract<ShopUIPart, { type: 'tool-prepare_order' }>
 
-/** What we remember about a purchase between leaving for Stripe and coming back. */
-interface PurchasedProduct {
-  title: string
-  price: number // cents
-  retailerName: string
-  image?: string
-}
+const ZINC_MCP_DOCS_URL = 'https://www.zinc.com/docs/v2/mcp/overview'
 
 const PLACEHOLDER_LEAD = 'Buy anything, like'
 const PLACEHOLDER_EXAMPLES = [
@@ -95,15 +93,10 @@ export default function Home() {
   const router = useRouter()
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [initialMessages, setInitialMessages] = useState<ShopUIMessage[]>([])
-  const [purchasedProduct, setPurchasedProduct] = useState<PurchasedProduct | null>(null)
-  const [customerEmail, setCustomerEmail] = useState<string | null>(null)
 
   // Bootstrap session + messages from URL/localStorage on mount
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const urlSessionId = params.get('sessionId')
-    const isSuccess = params.get('success') === 'true'
-
+    const urlSessionId = new URLSearchParams(window.location.search).get('sessionId')
     const id = urlSessionId || newSessionId()
 
     // Load messages from localStorage
@@ -117,36 +110,10 @@ export default function Home() {
       }
     }
 
-    // Check for successful purchase
-    if (isSuccess) {
-      const purchasedData = localStorage.getItem(`purchase-${id}`)
-      if (purchasedData) {
-        try {
-          setPurchasedProduct(JSON.parse(purchasedData))
-          localStorage.removeItem(`purchase-${id}`)
-        } catch {
-          // Invalid purchase data, ignore
-        }
-      }
-
-      // Fetch customer email from checkout session
-      const checkoutSessionId = params.get('checkout_session_id')
-      if (checkoutSessionId) {
-        fetch(`/api/checkout/session?session_id=${checkoutSessionId}`)
-          .then((res) => res.json())
-          .then((data) => {
-            if (data.email) setCustomerEmail(data.email)
-          })
-          .catch(() => {
-            // Ignore email fetch errors
-          })
-      }
-    }
-
     // Keep the session in the URL so refresh preserves it. Go through the Next
     // router (not raw history.replaceState) so the router's own URL stays in
     // sync and the param survives Fast Refresh / router.refresh().
-    if (urlSessionId !== id || isSuccess) {
+    if (urlSessionId !== id) {
       router.replace(`/?sessionId=${id}`, { scroll: false })
     }
     setSessionId(id)
@@ -158,14 +125,7 @@ export default function Home() {
 
   return (
     <MotionConfig transition={SPRING} reducedMotion="user">
-      <Chat
-        key={sessionId}
-        sessionId={sessionId}
-        initialMessages={initialMessages}
-        purchasedProduct={purchasedProduct}
-        customerEmail={customerEmail}
-        onPurchaseDismiss={() => setPurchasedProduct(null)}
-      />
+      <Chat key={sessionId} sessionId={sessionId} initialMessages={initialMessages} />
     </MotionConfig>
   )
 }
@@ -173,15 +133,9 @@ export default function Home() {
 function Chat({
   sessionId,
   initialMessages,
-  purchasedProduct,
-  customerEmail,
-  onPurchaseDismiss,
 }: {
   sessionId: string
   initialMessages: ShopUIMessage[]
-  purchasedProduct: PurchasedProduct | null
-  customerEmail: string | null
-  onPurchaseDismiss: () => void
 }) {
   const [input, setInput] = useState('')
   const formRef = useRef<HTMLFormElement>(null)
@@ -221,20 +175,19 @@ function Chat({
   }
 
   // "Buy this" hands the product back to the model (same pattern as the Zinc
-  // MCP views): the model calls create_checkout and renders the confirmation.
+  // MCP views): the model calls prepare_order and the review card renders.
   const handleBuy = (product: Product) => {
     if (isBusy) return
-    void sendMessage({ text: `Set up checkout for "${product.title}" (${product.url})` })
+    void sendMessage({ text: `Buy "${product.title}" (${product.url})` })
   }
 
   const handleReset = () => {
     setMessages([])
     clearError()
-    onPurchaseDismiss()
     localStorage.removeItem(`chat-${sessionId}`)
   }
 
-  const isEmpty = messages.length === 0 && !error && !purchasedProduct
+  const isEmpty = messages.length === 0 && !error
 
   // Show a "thinking" marker until the assistant starts producing output.
   const lastMessage = messages[messages.length - 1]
@@ -243,6 +196,19 @@ function Chat({
 
   return (
     <main className="relative flex h-svh flex-col bg-background">
+      <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center">
+        <Badge
+          variant="outline"
+          className="pointer-events-auto bg-background/90 text-muted-foreground backdrop-blur"
+          asChild
+        >
+          <a href={ZINC_MCP_DOCS_URL} target="_blank" rel="noopener noreferrer">
+            Powered by Zinc MCP
+            <ExternalLinkIcon />
+          </a>
+        </Badge>
+      </div>
+
       {/* Reset, floating top-right once there is something to reset */}
       <AnimatePresence>
         {messages.length > 0 && (
@@ -274,7 +240,7 @@ function Chat({
             {/* Bottom padding keeps the last turn clear of the floating composer */}
             <MessageScrollerContent
               aria-busy={isBusy || undefined}
-              className="mx-auto w-full max-w-2xl px-4 pt-14 pb-44 sm:px-6 md:pt-6"
+              className="mx-auto w-full max-w-2xl px-4 pt-14 pb-44 sm:px-6"
             >
               {isEmpty && (
                 <motion.div
@@ -340,14 +306,8 @@ function Chat({
                               />
                             )
                           }
-                          if (part.type === 'tool-create_checkout') {
-                            return (
-                              <CheckoutToolResult
-                                key={part.toolCallId}
-                                part={part}
-                                sessionId={sessionId}
-                              />
-                            )
+                          if (part.type === 'tool-prepare_order') {
+                            return <PrepareOrderResult key={part.toolCallId} part={part} />
                           }
                           return null
                         })}
@@ -408,31 +368,6 @@ function Chat({
                 )}
               </AnimatePresence>
 
-              {purchasedProduct && (
-                <MotionMessageScrollerItem
-                  messageId="purchase-success"
-                  variants={MESSAGE_ANIMATIONS.pop.variants}
-                  initial={reduceMotion ? false : 'initial'}
-                  animate="animate"
-                >
-                  <Message>
-                    <MessageContent>
-                      <Item variant="outline" size="sm" className="w-full">
-                        <ProductThumb src={purchasedProduct.image} />
-                        <ItemContent className="min-w-0">
-                          <ItemTitle>Order placed</ItemTitle>
-                          <ItemDescription className="truncate tabular-nums">
-                            {purchasedProduct.title} · {formatPrice(purchasedProduct.price)} · {purchasedProduct.retailerName}
-                          </ItemDescription>
-                        </ItemContent>
-                      </Item>
-                      <MessageFooter>
-                        We&apos;ll email {customerEmail ?? 'you'} a receipt and tracking information.
-                      </MessageFooter>
-                    </MessageContent>
-                  </Message>
-                </MotionMessageScrollerItem>
-              )}
             </MessageScrollerContent>
           </MessageScrollerViewport>
           <MessageScrollerButton className="data-[direction=end]:bottom-40" />
@@ -640,49 +575,120 @@ function SearchToolResult({
   }
 }
 
-function CheckoutToolResult({ part, sessionId }: { part: CheckoutToolPart; sessionId: string }) {
+type OrderPhase =
+  | { kind: 'review' }
+  | { kind: 'placing' }
+  | { kind: 'paying'; paymentId: string; payUrl: string | null }
+  | { kind: 'placed'; orderId: string }
+  | { kind: 'failed'; message: string }
+
+const PAYMENT_POLL_MS = 3000
+
+function orderStorageKey(toolCallId: string) {
+  return `order-${toolCallId}`
+}
+
+/**
+ * Our version of the Zinc MCP review card. Pay & place is the only path to
+ * place-order: the model can prepare an order but never confirm one.
+ */
+function PrepareOrderResult({ part }: { part: PrepareToolPart }) {
   const reduceMotion = useReducedMotion()
+  const [phase, setPhase] = useState<OrderPhase>({ kind: 'review' })
+
+  // Resume a payment or placed order after a reload
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(orderStorageKey(part.toolCallId))
+      if (saved) setPhase(JSON.parse(saved) as OrderPhase)
+    } catch {
+      // ignore storage failures
+    }
+  }, [part.toolCallId])
+
+  useEffect(() => {
+    if (phase.kind !== 'paying' && phase.kind !== 'placed') return
+    try {
+      localStorage.setItem(orderStorageKey(part.toolCallId), JSON.stringify(phase))
+    } catch {
+      // ignore storage failures
+    }
+  }, [part.toolCallId, phase])
+
+  // Poll the payment until the order exists (the payment page runs in another tab)
+  const paymentId = phase.kind === 'paying' ? phase.paymentId : null
+  useEffect(() => {
+    if (!paymentId) return
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const res = await fetch(`/api/order?payment_id=${encodeURIComponent(paymentId)}`)
+        const payment = (await res.json()) as McpPayment & { error?: string }
+        if (cancelled || !res.ok) return
+        if (payment.order_id) setPhase({ kind: 'placed', orderId: payment.order_id })
+        else if (payment.status === 'failed' || payment.status === 'expired')
+          setPhase({ kind: 'failed', message: payment.failure ?? 'Payment was not completed.' })
+      } catch {
+        // transient; try again next tick
+      }
+    }
+    void tick()
+    const interval = setInterval(tick, PAYMENT_POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [paymentId])
 
   if (part.state === 'input-streaming' || part.state === 'input-available') {
     return (
       <Marker role="status">
-        <MarkerContent className="shimmer">Preparing checkout...</MarkerContent>
+        <MarkerContent className="shimmer">Preparing your order...</MarkerContent>
       </Marker>
     )
   }
   if (part.state !== 'output-available') return null
 
-  const { productTitle, productPrice, productImage, productUrl } = part.input
-  const priceCents = Math.round(productPrice * 100)
-  let retailerName = 'the retailer'
-  try {
-    retailerName = new URL(productUrl).hostname.replace(/^www\./, '').split('.')[0]
-    retailerName = retailerName.charAt(0).toUpperCase() + retailerName.slice(1)
-  } catch {
-    // keep fallback
-  }
-
-  if (!part.output.url) {
+  const { product, quote, pending, error } = part.output
+  if (!product || !pending) {
     return (
       <Marker>
-        <MarkerContent>{part.output.error ?? 'Checkout is unavailable right now.'}</MarkerContent>
+        <MarkerContent>{error ?? 'This order cannot be placed right now.'}</MarkerContent>
       </Marker>
     )
   }
 
-  const rememberPurchase = () => {
-    const purchased: PurchasedProduct = {
-      title: productTitle,
-      price: priceCents,
-      retailerName,
-      image: productImage,
-    }
+  const handlePay = async () => {
+    // Open the tab inside the click so it isn't blocked as a popup
+    const tab = window.open('', '_blank')
+    setPhase({ kind: 'placing' })
     try {
-      localStorage.setItem(`purchase-${sessionId}`, JSON.stringify(purchased))
-    } catch {
-      // ignore storage failures
+      const res = await fetch('/api/order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pending),
+      })
+      const placed = (await res.json()) as McpPlaceOutput & { error?: string }
+      if (!res.ok) throw new Error(placed.error ?? 'Could not place the order.')
+
+      if (placed.order_id) {
+        tab?.close()
+        setPhase({ kind: 'placed', orderId: placed.order_id })
+      } else if (placed.payment) {
+        if (tab && placed.payment.pay_url) tab.location.href = placed.payment.pay_url
+        else tab?.close()
+        setPhase({ kind: 'paying', paymentId: placed.payment.payment_id, payUrl: placed.payment.pay_url })
+      } else {
+        throw new Error('Zinc did not return a payment page.')
+      }
+    } catch (err) {
+      tab?.close()
+      setPhase({ kind: 'failed', message: err instanceof Error ? err.message : 'Could not place the order.' })
     }
   }
+
+  const unit = formatPrice(product.priceCents)
+  const qty = product.quantity > 1 ? ` × ${product.quantity}` : ''
 
   return (
     <MotionItem
@@ -693,18 +699,62 @@ function CheckoutToolResult({ part, sessionId }: { part: CheckoutToolPart; sessi
       initial={reduceMotion ? false : 'initial'}
       animate="animate"
     >
-      <ProductThumb src={productImage} />
+      <ProductThumb src={product.image} />
       <ItemContent className="min-w-0">
-        <ItemTitle className="block w-full truncate">{productTitle}</ItemTitle>
+        <ItemTitle className="block w-full truncate">{product.title}</ItemTitle>
         <ItemDescription className="truncate tabular-nums">
-          {formatPrice(priceCents)} · {retailerName} · Nothing charged yet
+          {unit}
+          {qty} · {product.retailerName}
+          {quote && <> · about {formatPrice(quote.estimated_total_cents)} total</>}
         </ItemDescription>
       </ItemContent>
       <ItemActions>
-        <Button size="sm" asChild onClick={rememberPurchase}>
-          <a href={part.output.url}>Complete purchase</a>
-        </Button>
+        {phase.kind === 'review' && (
+          <Button size="sm" onClick={handlePay}>
+            Pay &amp; place
+          </Button>
+        )}
+        {phase.kind === 'placing' && (
+          <Button size="sm" disabled>
+            Opening payment...
+          </Button>
+        )}
+        {phase.kind === 'paying' && phase.payUrl && (
+          <Button size="sm" variant="outline" asChild>
+            <a href={phase.payUrl} target="_blank" rel="noopener noreferrer">
+              Open payment page
+            </a>
+          </Button>
+        )}
+        {phase.kind === 'failed' && (
+          <Button size="sm" variant="outline" onClick={handlePay}>
+            Try again
+          </Button>
+        )}
       </ItemActions>
+      <ItemFooter className="text-xs text-muted-foreground tabular-nums">
+        {phase.kind === 'review' || phase.kind === 'placing' ? (
+          quote ? (
+            <span>
+              {formatPrice(quote.listed_price_cents)} + est. tax {formatPrice(quote.estimated_tax_cents)} + shipping{' '}
+              {formatPrice(quote.shipping_cents)} + Zinc fee {formatPrice(quote.order_fee_cents)}. Hold up to{' '}
+              {formatPrice(quote.hold_cents)}; only the actual total is charged. Card, address and phone go on the
+              payment page.
+            </span>
+          ) : (
+            <span>Nothing charged yet. Card, address and phone go on the payment page.</span>
+          )
+        ) : phase.kind === 'paying' ? (
+          <span className="shimmer">Waiting for payment in the other tab...</span>
+        ) : phase.kind === 'placed' ? (
+          <span>
+            Order placed · <span className="font-mono">{phase.orderId.slice(0, 8)}</span>. Receipt and tracking go to
+            the email you paid with.
+          </span>
+        ) : (
+          <span className="text-destructive">{phase.message}</span>
+        )}
+      </ItemFooter>
     </MotionItem>
   )
 }
