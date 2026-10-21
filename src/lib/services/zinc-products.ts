@@ -5,6 +5,8 @@ import { logger } from '@/lib/utils/logger'
  *
  * - Cross-retailer search: GET /search?q=  (every supported retailer, results
  *   "woven" so no single store dominates; $0.01 per call from the Zinc wallet).
+ *   `retailer` can be repeated to restrict to specific retailers, Etsy, or up
+ *   to 3 Shopify stores (by slug or domain).
  *   https://www.zinc.com/docs/v2/api-reference/search/cross-retailer
  * - Retailer directory: GET /retailers (public, no auth).
  *   https://www.zinc.com/docs/v2/api-reference/retailers/list-retailers
@@ -52,6 +54,8 @@ interface ZincSearchResult {
   stars?: number | null
   num_reviews?: number | null
   available?: boolean | null
+  /** Etsy only: listing needs an option chosen before it can be ordered */
+  has_variants?: boolean | null
 }
 
 interface ZincSearchResponse {
@@ -102,7 +106,7 @@ function getApiKey(): string {
 
 async function zincGet<T>(
   path: string,
-  params: Record<string, string>,
+  params: Record<string, string> | [string, string][],
   options: { timeoutMs: number; auth: boolean }
 ): Promise<T> {
   const search = new URLSearchParams(params)
@@ -189,9 +193,18 @@ export interface SearchOptions {
   minPriceCents?: number
   /** Drop products priced above this (cents). Applied server-side by Zinc. */
   maxPriceCents?: number
-  /** Optional post-filter to one retailer slug (e.g. "walmart"). */
-  retailer?: string
+  /**
+   * Restrict to these retailers: slugs ("walmart"), "etsy", or Shopify store
+   * slugs/domains (max 3 stores). Filtered server-side by Zinc.
+   */
+  retailers?: string[]
+  sort?: SearchSort
 }
+
+export type SearchSort = 'relevance' | 'price_asc' | 'price_desc' | 'rating'
+
+/** Ask Zinc for extra candidates since we dedupe variants and drop unorderable rows. */
+const SEARCH_LIMIT = 20
 
 function productId(url: string): string {
   // FNV-1a 32-bit over the URL: stable, short, and good enough as a React key
@@ -218,16 +231,21 @@ function normalizeTitle(title: string): string {
  * Search every Zinc-supported retailer in one call.
  */
 export async function searchProducts(options: SearchOptions): Promise<Product[]> {
-  const { query, numResults = 6, minPriceCents, maxPriceCents, retailer } = options
+  const { query, numResults = 6, minPriceCents, maxPriceCents, retailers = [], sort } = options
   const started = Date.now()
 
-  logger.info('Searching products', { query, minPriceCents, maxPriceCents, retailer })
+  logger.info('Searching products', { query, minPriceCents, maxPriceCents, retailers, sort })
 
-  const params: Record<string, string> = { q: query }
-  if (minPriceCents !== undefined) params.min_price = String(Math.max(0, Math.round(minPriceCents)))
-  if (maxPriceCents !== undefined) params.max_price = String(Math.max(0, Math.round(maxPriceCents)))
+  const params: [string, string][] = [
+    ['q', query],
+    ['limit', String(Math.max(numResults, SEARCH_LIMIT))],
+  ]
+  if (minPriceCents !== undefined) params.push(['min_price', String(Math.max(0, Math.round(minPriceCents)))])
+  if (maxPriceCents !== undefined) params.push(['max_price', String(Math.max(0, Math.round(maxPriceCents)))])
+  if (sort && sort !== 'relevance') params.push(['sort', sort])
+  for (const r of retailers) params.push(['retailer', r])
 
-  const [data, retailers] = await Promise.all([
+  const [data, directory] = await Promise.all([
     zincGet<ZincSearchResponse>('/search', params, { timeoutMs: SEARCH_TIMEOUT_MS, auth: true }),
     listRetailers().catch((error) => {
       logger.warn('Retailer directory unavailable, using slugs', {
@@ -242,7 +260,7 @@ export async function searchProducts(options: SearchOptions): Promise<Product[]>
     return []
   }
 
-  const labels = new Map(retailers.map((r) => [r.retailer, r.displayName]))
+  const labels = new Map(directory.map((r) => [r.retailer, r.displayName]))
 
   const seen = new Set<string>()
   const seenTitles = new Set<string>()
@@ -251,7 +269,8 @@ export async function searchProducts(options: SearchOptions): Promise<Product[]>
   for (const r of data.results ?? []) {
     if (!r.url || !r.title || !r.price || r.price <= 0) continue
     if (r.available === false) continue
-    if (retailer && r.retailer !== retailer) continue
+    // Checkout can't pass an Etsy `variant` yet, and those orders fail without one
+    if (r.has_variants === true) continue
 
     const id = `${r.retailer}:${productId(r.url)}`
     if (seen.has(id)) continue

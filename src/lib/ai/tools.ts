@@ -27,12 +27,19 @@ export function createTools(sessionId: string) {
         query: z.string().describe('The product search query, without price words (put those in minPrice/maxPrice)'),
         minPrice: z.number().optional().describe('Minimum price in dollars, if the user gave a floor'),
         maxPrice: z.number().optional().describe('Maximum price in dollars, if the user gave a budget'),
-        retailer: z
-          .string()
+        retailers: z
+          .array(z.string())
+          .max(10)
           .optional()
-          .describe('Restrict results to one retailer slug (e.g. "walmart", "target") only if the user asks for a specific store'),
+          .describe(
+            'Only when the user names specific stores: retailer slugs (e.g. ["walmart", "target"]), "etsy", or Shopify store domains (e.g. "allbirds.com", at most 3 stores). Omit to search everywhere.'
+          ),
+        sort: z
+          .enum(['relevance', 'price_asc', 'price_desc', 'rating'])
+          .optional()
+          .describe('Use price_asc for "cheapest", price_desc for "most expensive"/"premium", rating for "best rated". Default relevance.'),
       }),
-      execute: async ({ query, minPrice, maxPrice, retailer }): Promise<SearchResult> => {
+      execute: async ({ query, minPrice, maxPrice, retailers, sort }): Promise<SearchResult> => {
         // Content moderation check
         const moderation = moderateSearchQuery(query)
         if (!moderation.allowed) {
@@ -49,7 +56,8 @@ export function createTools(sessionId: string) {
             numResults: 6,
             minPriceCents: minPrice !== undefined ? Math.round(minPrice * 100) : undefined,
             maxPriceCents: maxPrice !== undefined ? Math.round(maxPrice * 100) : undefined,
-            retailer: retailer?.toLowerCase().trim() || undefined,
+            retailers: retailers?.map((r) => r.toLowerCase().trim()).filter(Boolean),
+            sort,
           })
 
           if (products.length === 0) {
@@ -72,6 +80,14 @@ export function createTools(sessionId: string) {
               products: [],
               query,
               error: 'Product search is temporarily unavailable (the store wallet needs a top-up). Please try again later.',
+            }
+          }
+
+          if (error instanceof ZincProductsError && error.status === 422 && retailers?.length) {
+            return {
+              products: [],
+              query,
+              error: `One of those stores (${retailers.join(', ')}) isn't searchable through Zinc yet, or more than 3 Shopify stores were named. Try other stores or search everywhere.`,
             }
           }
 
