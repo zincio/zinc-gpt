@@ -1,34 +1,37 @@
 # Zinc GPT
 
-A conversational shopping assistant powered by AI that helps users find and purchase products across major US retailers.
+A conversational shopping assistant that helps users find and buy products across major US retailers, built on the [Zinc MCP server](https://www.zinc.com/docs/v2/mcp/overview).
 
 [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/zincio/zinc-gpt)
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fzincio%2Fzinc-gpt&env=ANTHROPIC_API_KEY,STRIPE_SECRET_KEY,STRIPE_WEBHOOK_SECRET,NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,ZINC_API_KEY&envDescription=API%20keys%20required%20for%20the%20shopping%20assistant&project-name=zinc-gpt&repository-name=zinc-gpt)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fzincio%2Fzinc-gpt&env=ANTHROPIC_API_KEY&envDescription=API%20key%20required%20for%20the%20shopping%20assistant&project-name=zinc-gpt&repository-name=zinc-gpt)
 
 ## Features
 
 - **AI-Powered Search**: Natural language product search across every retailer Zinc supports
-- **Real-Time Product Data**: Live pricing and images via Zinc's cross-retailer search
-- **Secure Checkout**: Stripe-powered payment processing
-- **Automated Fulfillment**: Zinc API integration for order placement
+- **Real-Time Product Data**: Live pricing and images via the [Zinc MCP server](https://www.zinc.com/docs/v2/mcp/overview)
+- **Checkout by Card**: Shoppers pay on Zinc's payment page, which also collects shipping address and phone
+- **Human-Confirmed Orders**: The model can only prepare an order; only the Pay & place click places it
 - **Content Moderation**: Built-in filtering for prohibited items
 
 ## Architecture
 
-Built with Next.js, the [Vercel AI SDK](https://ai-sdk.dev) (v7), and Claude Opus 5 via `@ai-sdk/anthropic`. Product search, product details, and order placement all go through the [Zinc API v2](https://www.zinc.com/docs/v2/api-reference).
+Built with Next.js, the [Vercel AI SDK](https://ai-sdk.dev) (v7), and Claude Opus 5 via `@ai-sdk/anthropic`. Search and checkout go through the hosted [Zinc MCP server](https://www.zinc.com/docs/v2/mcp/overview) (`https://mcp.zinc.com/mcp`), used headlessly: the app is the MCP host and renders its own cards from each tool's `structuredContent`. No Zinc API key, wallet, or payment processor is needed.
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Next.js App   │────▶│   Anthropic     │────▶│  Zinc Search /  │
-│   (Frontend)    │     │  Claude Opus 5  │     │  Zinc Products  │
-└────────┬────────┘     └─────────────────┘     └─────────────────┘
-         │
+┌─────────────────┐     ┌─────────────────┐     ┌──────────────────────────┐
+│   Next.js App   │────▶│   Anthropic     │────▶│  Zinc MCP                │
+│   (Frontend)    │     │  Claude Opus 5  │     │  search-products         │
+└────────┬────────┘     └─────────────────┘     │  prepare-order           │
+         │                                      └──────────────────────────┘
+         │ Pay & place click
          ▼
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│     Stripe      │────▶│   Webhook       │────▶│    Zinc API     │
-│   (Payments)    │     │   Handler       │     │  (Fulfillment)  │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
+┌─────────────────┐     ┌──────────────────────────┐     ┌─────────────────┐
+│   /api/order    │────▶│  Zinc MCP place-order    │────▶│  Zinc payment   │
+│                 │     │  get-payment-status      │     │  page (card)    │
+└─────────────────┘     └──────────────────────────┘     └─────────────────┘
 ```
+
+`prepare-order` returns a confirmation token in `_meta`. It goes to the browser for the Pay & place button and is stripped from what the model sees (`toModelOutput`), so the model can never place an order on its own.
 
 ## Limitations
 
@@ -41,7 +44,6 @@ Built with Next.js, the [Vercel AI SDK](https://ai-sdk.dev) (v7), and Claude Opu
 ### Prerequisites
 
 - Node.js 20+
-- A [Zinc](https://app.zinc.com) account with wallet funds (product search is billed per call)
 - npm or yarn
 
 ### Installation
@@ -71,14 +73,8 @@ AI_GATEWAY_API_KEY=          # ...or route through Vercel AI Gateway instead
 ANTHROPIC_MODEL=claude-opus-5   # default; e.g. claude-sonnet-5 for a cheaper tier
 ANTHROPIC_EFFORT=low            # low | medium | high | xhigh | max
 
-# Required: Payments
-STRIPE_SECRET_KEY=           # Stripe secret key
-STRIPE_WEBHOOK_SECRET=       # Stripe webhook signing secret
-NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=  # Stripe publishable key
-
-# Required: Order Fulfillment
-ZINC_API_KEY=                # Zinc API key (search + fulfillment)
-ZINC_WEBHOOK_SECRET=         # Zinc webhook secret (zn_whsec_...) from the dashboard
+# Optional: override the Zinc MCP endpoint
+ZINC_MCP_URL=https://mcp.zinc.com/mcp
 
 # App Configuration
 NEXT_PUBLIC_APP_URL=http://localhost:3000
@@ -97,26 +93,13 @@ npm test
 npm run build
 ```
 
-### Webhook Setup
-
-For local development, use ngrok or similar to expose webhooks:
-
-```bash
-ngrok http 3000
-```
-
-Configure webhooks in:
-- **Stripe Dashboard**: Point to `https://your-ngrok-url/api/stripe/webhook`
-- **Zinc Dashboard** (Settings -> Webhooks): Point to `https://your-ngrok-url/api/zinc/webhook` and copy the generated secret into `ZINC_WEBHOOK_SECRET`. Zinc signs each request with an HMAC-SHA256 `X-Webhook-Signature` header; the handler listens for `order.placed`, `order.failed`, `order.tracking_received`, `order.delivered`, and `order.cancelled`.
-
 ## API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/chat` | POST | AI chat endpoint |
-| `/api/checkout` | POST | Create Stripe checkout session |
-| `/api/stripe/webhook` | POST | Handle Stripe events |
-| `/api/zinc/webhook` | POST | Handle Zinc order events |
+| `/api/order` | POST | Place a prepared order (Pay & place click only) |
+| `/api/order?payment_id=` | GET | Payment status, polled until the order exists |
 
 ## Project Structure
 
@@ -125,9 +108,7 @@ src/
 ├── app/
 │   ├── api/
 │   │   ├── chat/           # AI chat endpoint
-│   │   ├── checkout/       # Stripe checkout
-│   │   ├── stripe/webhook/ # Stripe webhooks
-│   │   └── zinc/webhook/   # Zinc webhooks
+│   │   └── order/          # Pay & place + payment status
 │   └── page.tsx            # Main UI
 ├── components/             # React components
 ├── lib/
@@ -141,11 +122,8 @@ src/
 │   │   ├── rate-limit.ts      # Rate limiting
 │   │   └── validation.ts      # Request validation
 │   ├── services/
-│   │   ├── order-processor.ts # Order fulfillment
-│   │   ├── product-parser.ts  # URL parsing
-│   │   ├── stripe.ts          # Payment processing
-│   │   ├── zinc.ts            # Zinc orders client
-│   │   └── zinc-products.ts   # Zinc cross-retailer search + retailer directory
+│   │   ├── zinc-mcp.ts        # Zinc MCP client (search, prepare, place, payment status)
+│   │   └── zinc-products.ts   # Retailer directory (public /retailers)
 │   └── utils/
 │       └── logger.ts          # Structured logging
 └── types/
@@ -170,7 +148,7 @@ npm run test:coverage
 - Rate limiting is applied to all public endpoints
 - Content moderation filters prohibited items
 - Input validation on all API endpoints
-- Webhook signatures are verified
+- Order confirmation tokens never reach the model
 
 ## Contributing
 

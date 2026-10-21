@@ -68,33 +68,3 @@ export function safeParseChatRequest(body: unknown): {
 
   return { success: false, error: formatFirstIssue(result.error) }
 }
-
-/**
- * Schema for checkout request body validation.
- */
-export const checkoutRequestSchema = z.object({
-  productTitle: z.string().min(1).max(500),
-  productPrice: z.number().positive(),
-  productImage: z.url().optional().nullable(),
-  productUrl: z.url(),
-  sessionId: z.string().optional().nullable(),
-})
-
-export type CheckoutRequest = z.infer<typeof checkoutRequestSchema>
-
-/**
- * Safe validation for checkout requests.
- */
-export function safeParseCheckoutRequest(body: unknown): {
-  success: boolean
-  data?: CheckoutRequest
-  error?: string
-} {
-  const result = checkoutRequestSchema.safeParse(body)
-
-  if (result.success) {
-    return { success: true, data: result.data }
-  }
-
-  return { success: false, error: formatFirstIssue(result.error) }
-}

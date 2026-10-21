@@ -55,7 +55,7 @@ type ShopUIPart = ShopUIMessage['parts'][number]
 type SearchToolPart = Extract<ShopUIPart, { type: 'tool-search_products' }>
 type PrepareToolPart = Extract<ShopUIPart, { type: 'tool-prepare_order' }>
 
-const ZINC_MCP_DOCS_URL = 'https://www.zinc.com/docs/v2/mcp/overview'
+const REPO_URL = 'https://github.com/zincio/zinc-gpt'
 
 const PLACEHOLDER_LEAD = 'Buy anything, like'
 const PLACEHOLDER_EXAMPLES = [
@@ -202,7 +202,7 @@ function Chat({
           className="pointer-events-auto bg-background/90 text-muted-foreground shadow-sm backdrop-blur"
           asChild
         >
-          <a href={ZINC_MCP_DOCS_URL} target="_blank" rel="noopener noreferrer">
+          <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
             <ZincLogo className="text-foreground" />
             Powered by Zinc MCP
           </a>
